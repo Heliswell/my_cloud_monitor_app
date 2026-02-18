@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cloud Native System Monitor</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #042c72 100%);
+            color: white;
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 8px 20px;
+            background: #2ecc71;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: bold;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* Main Metrics Grid */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .metric-card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transition: transform 0.3s ease;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-5px);
+            border-color: rgba(255, 255, 255, 0.4);
+        }
+
+        .gauge-container {
+            height: 250px;
+        }
+
+        /* Alert Box */
+        .alert-box {
+            margin-bottom: 20px;
+            padding: 20px;
+            border-radius: 10px;
+            font-weight: bold;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .alert-normal {
+            background: rgba(46, 204, 113, 0.2);
+            border: 2px solid #2ecc71;
+        }
+
+        .alert-triggered {
+            background: rgba(231, 76, 60, 0.3);
+            border: 2px solid #e74c3c;
+            animation: alertPulse 1s infinite;
+        }
+
+        @keyframes alertPulse {
+            0%, 100% { box-shadow: 0 0 20px rgba(231, 76, 60, 0.5); }
+            50% { box-shadow: 0 0 40px rgba(231, 76, 60, 0.8); }
+        }
+
+        /* Network Stats */
+        .network-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .network-card {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .network-card h3 {
+            font-size: 0.9rem;
+            color: #bdc3c7;
+            margin-bottom: 10px;
+        }
+
+        .network-card .value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #00f2fe;
+        }
+
+        /* Process Tables */
+        .process-section {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+
+        .process-section h2 {
+            margin-bottom: 15px;
+            color: #00f2fe;
+        }
+
+        .process-tables {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 12px;
+            text-align: left;
+            font-size: 0.9rem;
+            border-radius: 5px 5px 0 0;
+        }
+
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        tr:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        /* Historical Chart */
+        .history-section {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+
+        .history-section h2 {
+            margin-bottom: 15px;
+            color: #00f2fe;
+        }
+
+        .chart-container {
+            height: 300px;
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #bdc3c7;
+            font-size: 0.9rem;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .metrics-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .process-tables {
+                grid-template-columns: 1fr;
+            }
+
+            .network-stats {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>CloudMonitor</h1>
+            <span class="status-badge" id="statusBadge">● SYSTEM LIVE</span>
+        </div>
+
+        <!-- Alert Box -->
+        <div id="alertBox" class="alert-box alert-normal">
+            <div id="alertIcon">✓</div>
+            <div id="alertMessage">System Operating Normally</div>
+        </div>
+
+        <!-- Main Metrics: CPU, Memory, Disk -->
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <h3>CPU Utilization</h3>
+                <div id="cpuGauge" class="gauge-container"></div>
+            </div>
+            
+            <div class="metric-card">
+                <h3>Memory Utilization</h3>
+                <div id="memoryGauge" class="gauge-container"></div>
+            </div>
+
+            <div class="metric-card">
+                <h3>Disk Usage</h3>
+                <div id="diskGauge" class="gauge-container"></div>
+            </div>
+        </div>
+        <div style="display: flex; justify-content: center; margin-bottom: 25px;">
+            <a href="/api/export-csv" class="status-badge" style="text-decoration: none; background: #3498db; animation: none; cursor: pointer;">
+                📥 Download Full CSV Report
+            </a>
+        </div>
+
+        <!-- Network Stats -->
+        <div class="network-stats">
+            <div class="network-card">
+                <h3> Network Sent</h3>
+                <div class="value" id="networkSent">0 GB</div>
+            </div>
+            <div class="network-card">
+                <h3> Network Received</h3>
+                <div class="value" id="networkRecv">0 GB</div>
+            </div>
+        </div>
+
+        <!-- Top Processes -->
+        <div class="process-section">
+            <h2>🔥 Top Resource-Consuming Processes</h2>
+            <div class="process-tables">
+                <div>
+                    <h3>By CPU Usage</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>PID</th>
+                                <th>Process Name</th>
+                                <th>CPU %</th>
+                            </tr>
+                        </thead>
+                        <tbody id="topCpuProcesses">
+                            <tr><td colspan="3">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div>
+                    <h3>By Memory Usage</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>PID</th>
+                                <th>Process Name</th>
+                                <th>Memory %</th>
+                            </tr>
+                        </thead>
+                        <tbody id="topMemoryProcesses">
+                            <tr><td colspan="3">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Historical Data Chart -->
+        <div class="history-section">
+            <h2>📊 Historical Metrics (Last 50 Data Points)</h2>
+            <div id="historyChart" class="chart-container"></div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            Cloud-Native Monitoring Tool © 2025<br>
+            Running on Kubernetes | Powered by Flask & Python
+        </div>
+    </div>
+
+    <script>
+        // Create gauge charts
+        function createGauge(elementId, value, title, color) {
+            const data = [{
+                type: "indicator",
+                mode: "gauge+number",
+                value: value,
+                title: { text: title, font: { size: 16, color: 'white' } },
+                gauge: {
+                    axis: { range: [null, 100], tickcolor: 'white' },
+                    bar: { color: color },
+                    bgcolor: "rgba(255,255,255,0.1)",
+                    borderwidth: 2,
+                    bordercolor: "rgba(255,255,255,0.3)",
+                    steps: [
+                        { range: [0, 50], color: "rgba(46, 204, 113, 0.3)" },
+                        { range: [50, 75], color: "rgba(241, 196, 15, 0.3)" },
+                        { range: [75, 100], color: "rgba(231, 76, 60, 0.3)" }
+                    ],
+                }
+            }];
+
+            const layout = {
+                margin: { t: 25, r: 25, l: 25, b: 25 },
+                paper_bgcolor: "rgba(0,0,0,0)",
+                font: { color: "white", family: "Segoe UI" }
+            };
+
+            Plotly.newPlot(elementId, data, layout, {displayModeBar: false});
+        }
+
+        // Update process tables
+        function updateProcessTable(processes, tableId, metricKey) {
+            const tbody = document.getElementById(tableId);
+            if (!processes || processes.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3">No data</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = processes.map(proc => `
+                <tr>
+                    <td>${proc.pid}</td>
+                    <td>${proc.name}</td>
+                    <td><strong>${proc[metricKey]}%</strong></td>
+                </tr>
+            `).join('');
+        }
+
+        // Update historical chart
+        function updateHistoryChart(history) {
+            if (!history || history.length === 0) return;
+
+            const timestamps = history.map(h => new Date(h.timestamp).toLocaleTimeString());
+            const cpuData = history.map(h => h.cpu);
+            const memoryData = history.map(h => h.memory);
+            const diskData = history.map(h => h.disk);
+
+            const traces = [
+                {
+                    x: timestamps,
+                    y: cpuData,
+                    name: 'CPU %',
+                    type: 'scatter',
+                    line: { color: '#3498db', width: 2 }
+                },
+                {
+                    x: timestamps,
+                    y: memoryData,
+                    name: 'Memory %',
+                    type: 'scatter',
+                    line: { color: '#9b59b6', width: 2 }
+                },
+                {
+                    x: timestamps,
+                    y: diskData,
+                    name: 'Disk %',
+                    type: 'scatter',
+                    line: { color: '#e67e22', width: 2 }
+                }
+            ];
+
+            const layout = {
+                margin: { t: 30, r: 30, l: 50, b: 50 },
+                paper_bgcolor: "rgba(0,0,0,0)",
+                plot_bgcolor: "rgba(255,255,255,0.05)",
+                font: { color: "white" },
+                xaxis: { 
+                    title: 'Time',
+                    gridcolor: 'rgba(255,255,255,0.1)'
+                },
+                yaxis: { 
+                    title: 'Usage %',
+                    gridcolor: 'rgba(255,255,255,0.1)',
+                    range: [0, 100]
+                },
+                legend: {
+                    orientation: 'h',
+                    y: 1.1
+                }
+            };
+
+            Plotly.newPlot('historyChart', traces, layout, {displayModeBar: false});
+        }
+
+        // Fetch and update metrics
+        async function updateMetrics() {
+            try {
+                const response = await fetch('/api/metrics');
+                const data = await response.json();
+
+                // Update gauges
+                createGauge('cpuGauge', data.cpu, '', '#3498db');
+                createGauge('memoryGauge', data.memory, '', '#9b59b6');
+                createGauge('diskGauge', data.disk, '', '#e67e22');
+
+                // Update network stats
+                document.getElementById('networkSent').textContent = `${data.network.sent_gb} GB`;
+                document.getElementById('networkRecv').textContent = `${data.network.recv_gb} GB`;
+
+                // Update process tables
+                updateProcessTable(data.top_processes.by_cpu, 'topCpuProcesses', 'cpu');
+                updateProcessTable(data.top_processes.by_memory, 'topMemoryProcesses', 'memory');
+
+                // Update alert box
+                const alertBox = document.getElementById('alertBox');
+                const alertMessage = document.getElementById('alertMessage');
+                const alertIcon = document.getElementById('alertIcon');
+
+                if (data.alert.triggered) {
+                    alertBox.className = 'alert-box alert-triggered';
+                    alertIcon.textContent = '⚠';
+                    alertMessage.textContent = data.alert.message;
+                } else {
+                    alertBox.className = 'alert-box alert-normal';
+                    alertIcon.textContent = '✓';
+                    alertMessage.textContent = data.alert.message;
+                }
+
+            } catch (error) {
+                console.error('Error fetching metrics:', error);
+            }
+        }
+
+        // Fetch historical data
+        async function updateHistory() {
+            try {
+                const response = await fetch('/api/history');
+                const history = await response.json();
+                updateHistoryChart(history);
+            } catch (error) {
+                console.error('Error fetching history:', error);
+            }
+        }
+
+        // Initialize
+        updateMetrics();
+        updateHistory();
+
+        // Update every 5 seconds
+        setInterval(updateMetrics, 5000);
+        setInterval(updateHistory, 10000); // Update history every 10 seconds
+    </script>
+</body>
+</html>
