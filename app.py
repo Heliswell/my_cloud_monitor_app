@@ -365,7 +365,7 @@ scheduler.start()
 # --- 🧪 MANUAL EMAIL VERIFICATION ---
 # Triggering this once manually right now to verify your App Password works!
 print("🚀 Triggering manual email verification...")
-generate_summary_report(days=1)
+#generate_summary_report(days=1)
 # ------------------------------------
 
 if __name__ == '__main__':
