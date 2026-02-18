@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloud-monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: monitor
+  template:
+    metadata:
+      labels:
+        app: monitor
+    spec:
+      serviceAccountName: cloudmonitor-sa # Uses the permissions you just updated
+      containers:
+      - name: monitor-app
+        image: cloud-monitor:v1 # Make sure this matches your 'docker build' tag
+        imagePullPolicy: Never # Crucial for Minikube to use your local image
+        ports:
+        - containerPort: 5000
+        envFrom:
+        - secretRef:
+            name: cloud-monitor-secrets # Pulls your Gmail/Slack credentials safely

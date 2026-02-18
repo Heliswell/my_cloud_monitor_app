@@ -332,6 +332,13 @@ def export_csv():
     except Exception as e:
         print(f"Export Error: {e}")
         return jsonify({"error": "Failed to generate report"}), 500
+    
+
+@app.route('/api/pods')
+def get_pods():
+    # This calls the function you've likely started in k8s_monitor.py
+    pods = get_pod_health() 
+    return jsonify(pods)
 
 @app.route('/health')
 def health_check():
