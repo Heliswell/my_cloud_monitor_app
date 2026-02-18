@@ -1,6 +1,7 @@
 # ☁️ Cloud-Native System Monitor & AI Reporter
 
 A robust Python-based monitoring dashboard designed for local and Kubernetes environments. It features real-time metrics, AI anomaly detection, and automated reporting.
+![Cloud Native Dashboard](images/dashboard.png)
 
 ## 🚀 Key Features
 * **Real-time Monitoring**: Tracks CPU, RAM, Disk, and Network I/O.
