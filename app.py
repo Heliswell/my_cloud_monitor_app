@@ -390,4 +390,7 @@ if __name__ == '__main__':
     print("✓ AI-Powered Anomaly Detection")
     print("=" * 50)
     
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run( host='0.0.0.0', port=5000)
+    is_debug = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
+    app.run(host='0.0.0.0', port=5000, debug=is_debug)
+    
