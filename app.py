@@ -19,7 +19,9 @@ from flask import Flask, render_template, jsonify
 from datetime import datetime
 import json
 import os  
-
+# Add these near your other imports (around line 20)
+import pandas as pd
+from sklearn.ensemble import IsolationForest
 import requests
 from dotenv import load_dotenv 
 
