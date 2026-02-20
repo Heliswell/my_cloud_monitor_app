@@ -98,7 +98,7 @@ DATA_FILE = 'backend_data.json'
 history = [] 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-DB_PATH = os.path.join(BASE_DIR, 'metrics.db')
+DB_PATH = os.path.join(BASE_DIR, 'metrics.db') 
 
 def save_to_db(cpu, memory, disk):
     """Saves metrics to SQL so the CSV export works"""
@@ -219,7 +219,8 @@ def get_pod_health():
     try:
         # Check if we are in the cloud (EKS) or local (Laptop/Minikube)
         try:
-            config.load_incluster_config() # Try Cloud first
+            #config.load_incluster_config() # Try Cloud first
+            config.load_kube_config(config_file='/root/.kube/config')
         except:
             config.load_kube_config()      # Fallback to Local/Minikube
 
