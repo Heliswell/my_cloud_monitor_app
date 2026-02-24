@@ -1,11 +1,18 @@
 from kubernetes import client, config
+from kubernetes.config.config_exception import ConfigException
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
 import sqlite3
 import time 
 last_alert_time = 0 
+last_email_alert_time = 0
 # Cooldown period in seconds (e.g., 300 seconds = 5 minutes)
 ALERT_COOLDOWN = 120
+EMAIL_ALERT_COOLDOWN = 300
+CPU_ABSOLUTE_ALERT_THRESHOLD = 80
+MEMORY_ABSOLUTE_ALERT_THRESHOLD = 85
+DISK_ABSOLUTE_ALERT_THRESHOLD = 90
+BASELINE_POINTS_REQUIRED = 30
 
 import csv
 import io
@@ -15,13 +22,9 @@ import smtplib
 from email.message import EmailMessage
 
 import psutil
-from flask import Flask, render_template, jsonify
-from datetime import datetime
+from flask import Flask, render_template, jsonify, request
 import json
 import os  
-# Add these near your other imports (around line 20)
-import pandas as pd
-from sklearn.ensemble import IsolationForest
 import requests
 from dotenv import load_dotenv 
 
@@ -36,7 +39,7 @@ def send_email_alert(subject, body):
 
     if not all([sender_email, receiver_email, app_password]):
         print("Email credentials missing in .env")
-        return
+        return False
 
     msg = EmailMessage()
     msg["From"] = sender_email
@@ -49,20 +52,22 @@ def send_email_alert(subject, body):
             server.login(sender_email, app_password)
             server.send_message(msg)
             print(f"Email sent: {subject}")
+            return True
     except Exception as e:
         print(f"Email error: {e}") 
+        return False
 
 
 def generate_summary_report(days=1):
-    conn = sqlite3.connect(DB_PATH) # Using your dynamic path
-    cursor = conn.cursor()
-    
-    # Simple query to get average metrics from the last X days
-    query = "SELECT AVG(cpu), AVG(memory) FROM metrics WHERE timestamp > datetime('now', ?)"
-    cursor.execute(query, (f'-{days} days',))
-    
-    avg_cpu, avg_mem = cursor.fetchone()
-    conn.close()
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            query = "SELECT AVG(cpu), AVG(memory) FROM metrics WHERE timestamp > datetime('now', ?)"
+            cursor.execute(query, (f'-{days} days',))
+            avg_cpu, avg_mem = cursor.fetchone()
+    except sqlite3.Error as e:
+        print(f"Summary report DB error: {e}")
+        return
 
     # Handle cases where the database might be empty to avoid errors
     cpu_val = avg_cpu if avg_cpu is not None else 0
@@ -72,6 +77,29 @@ def generate_summary_report(days=1):
     
     # 🟢 FIX: Only send the relevant report
     send_email_alert(f"Cloud Monitor: {days}-Day Report", report_body)
+
+
+def send_anomaly_email_report(cpu, memory, disk, alert_message, current_time=None, force=False):
+    global last_email_alert_time
+    if current_time is None:
+        current_time = time.time()
+
+    if not force and (current_time - last_email_alert_time) <= EMAIL_ALERT_COOLDOWN:
+        remaining = int(EMAIL_ALERT_COOLDOWN - (current_time - last_email_alert_time))
+        return False, remaining
+
+    report_body = (
+        "Cloud Monitor Alert Report:\n"
+        f"Time: {datetime.now().isoformat()}\n"
+        f"CPU: {cpu:.2f}%\n"
+        f"Memory: {memory:.2f}%\n"
+        f"Disk: {disk:.2f}%\n"
+        f"Detection: {alert_message}"
+    )
+    if send_email_alert("Cloud Monitor: Alert Report", report_body):
+        last_email_alert_time = current_time
+        return True, 0
+    return False, 0
     
 def send_slack_message(text):
     """Sends a notification to the Slack webhook URL"""
@@ -103,14 +131,13 @@ DB_PATH = os.path.join(BASE_DIR, 'metrics.db')
 def save_to_db(cpu, memory, disk):
     """Saves metrics to SQL so the CSV export works"""
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute('''CREATE TABLE IF NOT EXISTS metrics 
-                          (timestamp TEXT, cpu REAL, memory REAL, disk REAL)''')
-        cursor.execute("INSERT INTO metrics VALUES (?, ?, ?, ?)", 
-                       (datetime.now().isoformat(), cpu, memory, disk))
-        conn.commit()
-        conn.close()
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''CREATE TABLE IF NOT EXISTS metrics 
+                              (timestamp TEXT, cpu REAL, memory REAL, disk REAL)''')
+            cursor.execute("INSERT INTO metrics VALUES (?, ?, ?, ?)", 
+                           (datetime.now().isoformat(), cpu, memory, disk))
+            conn.commit()
     except Exception as e:
         print(f"DB Error: {e}")
 
@@ -124,7 +151,8 @@ def load_history():
                 # Keep only last 100 data points
                 if len(history) > 100:
                     history = history[-100:]
-        except:
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"History load error: {e}")
             history = []
 
 def save_data_point(data):
@@ -175,13 +203,23 @@ def detect_anomaly(cpu, memory, disk):
     Simple anomaly detection based on historical data
     Returns: (is_anomaly, message)
     """
-    if len(history) < 30:  # Need at least 30 data points
-        return False, "Collecting baseline data..."
+    # Always enforce absolute thresholds, even before baseline is built.
+    if cpu > CPU_ABSOLUTE_ALERT_THRESHOLD:
+        return True, "AI Alert: High CPU Usage Detected!"
+    
+    if memory > MEMORY_ABSOLUTE_ALERT_THRESHOLD:
+        return True, "AI Alert: High Memory Usage Detected!"
+    
+    if disk > DISK_ABSOLUTE_ALERT_THRESHOLD:
+        return True, "AI Alert: Critical Disk Space!"
+
+    if len(history) < BASELINE_POINTS_REQUIRED:
+        return False, f"Collecting baseline data... ({len(history)}/{BASELINE_POINTS_REQUIRED})"
     
     # Calculate average and standard deviation from history
-    cpu_values = [h['cpu'] for h in history[-30:]]
-    memory_values = [h['memory'] for h in history[-30:]]
-    disk_values = [h['disk'] for h in history[-30:]]
+    cpu_values = [h['cpu'] for h in history[-BASELINE_POINTS_REQUIRED:]]
+    memory_values = [h['memory'] for h in history[-BASELINE_POINTS_REQUIRED:]]
+    disk_values = [h['disk'] for h in history[-BASELINE_POINTS_REQUIRED:]]
     
     avg_cpu = sum(cpu_values) / len(cpu_values)
     avg_memory = sum(memory_values) / len(memory_values)
@@ -203,26 +241,14 @@ def detect_anomaly(cpu, memory, disk):
     if disk_diff > 5:
         return True, f"AI Alert: Unusual Disk Usage Change! (Current: {disk}%, Normal: {avg_disk:.1f}%)"
     
-    # Check absolute thresholds
-    if cpu > 80:             
-        return True, "Alert: High CPU Usage Detected!"
-    
-    if memory > 85:
-        return True, "Alert: High Memory Usage Detected!"
-    
-    if disk > 90:
-        return True, "Alert: Critical Disk Space!"
-    
-    return False, "System Normal"   
+    return False, "System Operating Normally"   
 
 def get_pod_health():
     try:
-        # Check if we are in the cloud (EKS) or local (Laptop/Minikube)
         try:
-            #config.load_incluster_config() # Try Cloud first
-            config.load_kube_config(config_file='/root/.kube/config')
-        except:
-            config.load_kube_config()      # Fallback to Local/Minikube
+            config.load_incluster_config()
+        except ConfigException:
+            config.load_kube_config()
 
         v1 = client.CoreV1Api()
         pods = v1.list_pod_for_all_namespaces(watch=False)
@@ -235,9 +261,11 @@ def get_pod_health():
                 "ip": pod.status.pod_ip,
                 "health": "healthy" if pod.status.phase == "Running" else "critical" # Added health flag
             })
-        return pod_list
+        return pod_list, None
     except Exception as e:
-        return [] # Return empty list so the frontend doesn't crash
+        error_message = str(e)
+        print(f"Pod health error: {error_message}")
+        return [], error_message
 
 
 
@@ -263,7 +291,10 @@ def get_metrics():
     network_recv_gb = round(net_io.bytes_recv / (1024**3), 2)
     top_processes = get_top_processes(5)
     
-    # 3. Update History
+    # 3. AI-Powered Anomaly Detection (use prior history, not current point)
+    is_anomaly, alert_message = detect_anomaly(cpu_metric, mem_metric, disk_metric)
+
+    # 4. Update History after detection
     data_point = {
         'cpu': cpu_metric,
         'memory': mem_metric,
@@ -271,11 +302,7 @@ def get_metrics():
         'timestamp': datetime.now().isoformat()
     }
     save_data_point(data_point) 
-
     save_to_db(cpu_metric, mem_metric, disk_metric)
-    
-    # 4. AI-Powered Anomaly Detection
-    is_anomaly, alert_message = detect_anomaly(cpu_metric, mem_metric, disk_metric)
 
     # 5. Throttled Slack Trigger
     if is_anomaly:
@@ -288,6 +315,14 @@ def get_metrics():
         else:
             remaining = int(ALERT_COOLDOWN - (current_time - last_alert_time))
             print(f"Alert suppressed. Next available in: {remaining}s")
+
+        email_sent, email_remaining = send_anomaly_email_report(
+            cpu_metric, mem_metric, disk_metric, alert_message, current_time=current_time
+        )
+        if email_sent:
+            print("✓ Email alert sent.")
+        elif email_remaining > 0:
+            print(f"Email alert suppressed. Next available in: {email_remaining}s")
     
     # 6. Return data to the Dashboard
     return jsonify({
@@ -306,19 +341,78 @@ def get_history():
     """API endpoint to get historical data"""
     return jsonify(history[-50:])  # Return last 50 data points
 
+
+@app.route('/api/demo/send-summary-email', methods=['GET', 'POST'])
+def demo_send_summary_email():
+    """Manually trigger summary email for demos."""
+    days = request.args.get('days', default=1, type=int)
+    if days is None or days < 1 or days > 30:
+        return jsonify({"error": "days must be between 1 and 30"}), 400
+
+    generate_summary_report(days=days)
+    return jsonify({
+        "status": "sent",
+        "type": "summary",
+        "days": days
+    })
+
+
+@app.route('/api/demo/send-alert-email', methods=['GET', 'POST'])
+def demo_send_alert_email():
+    """Manually trigger anomaly email report for demos."""
+    payload = request.get_json(silent=True) or {}
+
+    def read_metric(name, default):
+        query_val = request.args.get(name, default=None, type=float)
+        if query_val is not None:
+            return query_val
+        try:
+            return float(payload.get(name, default))
+        except (TypeError, ValueError):
+            return default
+
+    cpu = read_metric("cpu", psutil.cpu_percent(interval=0))
+    memory = read_metric("memory", psutil.virtual_memory().percent)
+    disk = read_metric("disk", psutil.disk_usage('/').percent)
+
+    force_flag = request.args.get("force", str(payload.get("force", "false"))).lower()
+    force_send = force_flag in ("1", "true", "yes")
+
+    is_anomaly, alert_message = detect_anomaly(cpu, memory, disk)
+    if not is_anomaly and not force_send:
+        return jsonify({
+            "status": "not_sent",
+            "reason": "No anomaly detected. Use force=true to send anyway.",
+            "alert": {"triggered": is_anomaly, "message": alert_message},
+            "metrics": {"cpu": cpu, "memory": memory, "disk": disk}
+        })
+
+    email_sent, email_remaining = send_anomaly_email_report(
+        cpu, memory, disk, alert_message, force=force_send
+    )
+    if not email_sent and email_remaining > 0:
+        return jsonify({
+            "status": "suppressed",
+            "reason": f"Email cooldown active. Try again in {email_remaining}s.",
+            "alert": {"triggered": is_anomaly, "message": alert_message},
+            "metrics": {"cpu": cpu, "memory": memory, "disk": disk}
+        })
+
+    return jsonify({
+        "status": "sent",
+        "type": "alert",
+        "alert": {"triggered": is_anomaly, "message": alert_message},
+        "metrics": {"cpu": cpu, "memory": memory, "disk": disk}
+    })
+
 @app.route('/api/export-csv')
 def export_csv():
     """Generates a CSV file from the metrics.db data"""
     try:
-        # Use the database you've already established in your actual app
-        conn = sqlite3.connect('metrics.db')
-        cursor = conn.cursor()
-        
-        # Select the same columns seen in your history endpoint
-      
-        cursor.execute("SELECT timestamp, cpu, memory, disk FROM metrics ORDER BY timestamp DESC")
-        data = cursor.fetchall()
-        conn.close()
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT timestamp, cpu, memory, disk FROM metrics ORDER BY timestamp DESC")
+            data = cursor.fetchall()
 
         # Create CSV in memory using io.StringIO
         output = io.StringIO()
@@ -339,9 +433,11 @@ def export_csv():
 
 @app.route('/api/pods')
 def get_pods():
-    # This calls the function you've likely started in k8s_monitor.py
-    pods = get_pod_health() 
-    return jsonify(pods)
+    pods, error = get_pod_health()
+    return jsonify({
+        "pods": pods,
+        "error": error
+    })
 
 @app.route('/health')
 def health_check():
@@ -362,26 +458,29 @@ def readiness_check():
     except Exception as e:
         return jsonify({'status': 'not ready', 'error': str(e)}), 503 
     
-    # --- SCHEDULER SETUP ---
-# 1. Initialize the background scheduler
-scheduler = BackgroundScheduler()
+scheduler = None
 
-# 2. Schedule the report for 09:00 AM every day
-scheduler.add_job(func=generate_summary_report, trigger='cron', hour=9, minute=0)
 
-# 3. Start the scheduler thread
-scheduler.start()
+def initialize_app_state():
+    load_history()
 
-# --- 🧪 MANUAL EMAIL VERIFICATION ---
-# Triggering this once manually right now to verify your App Password works!
-print("🚀 Triggering manual email verification...")
-#generate_summary_report(days=1)
-# ------------------------------------
+
+def start_scheduler():
+    global scheduler
+    if scheduler is not None:
+        return
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(func=generate_summary_report, trigger='cron', hour=9, minute=0)
+    scheduler.start()
+    print("Background scheduler started.")
+
+
+initialize_app_state()
+
+if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or os.environ.get("FLASK_DEBUG", "").lower() != "true":
+    start_scheduler()
 
 if __name__ == '__main__':
-    # Load historical data on startup
-    load_history()
-    
     print("=" * 50)
     print("Cloud Native Monitoring App Starting...")
     print("Features Enabled:")
@@ -393,7 +492,6 @@ if __name__ == '__main__':
     print("✓ AI-Powered Anomaly Detection")
     print("=" * 50)
     
-    app.run( host='0.0.0.0', port=5000)
     is_debug = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
     app.run(host='0.0.0.0', port=5000, debug=is_debug)
     

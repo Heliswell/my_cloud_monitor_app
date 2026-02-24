@@ -413,6 +413,9 @@
         // Update process tables
         function updateProcessTable(processes, tableId, metricKey) {
             const tbody = document.getElementById(tableId);
+            if (!tbody) {
+                return;
+            }
             if (!processes || processes.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="3">No data</td></tr>';
                 return;
@@ -537,8 +540,15 @@
 async function updatePodHealth() {
     try {
         const response = await fetch('/api/pods');
-        const pods = await response.json();
+        const payload = await response.json();
+        const pods = Array.isArray(payload) ? payload : (payload.pods || []);
+        const podError = Array.isArray(payload) ? null : payload.error;
         const podBody = document.getElementById('podBody');
+
+        if (podError) {
+            podBody.innerHTML = `<tr><td colspan="4">Kubernetes API unreachable: ${podError}</td></tr>`;
+            return;
+        }
         
         if (!pods || pods.length === 0) {
             podBody.innerHTML = '<tr><td colspan="4">No pods found in cluster</td></tr>';
@@ -558,6 +568,8 @@ async function updatePodHealth() {
         }).join('');
     } catch (error) {
         console.error('Error fetching pod health:', error);
+        const podBody = document.getElementById('podBody');
+        podBody.innerHTML = '<tr><td colspan="4">Failed to load pod health data</td></tr>';
     }
 }
 

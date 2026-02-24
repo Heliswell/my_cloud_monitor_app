@@ -6,19 +6,36 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: monitor
+      app: cloud-monitor
   template:
     metadata:
       labels:
-        app: monitor
+        app: cloud-monitor
     spec:
-      serviceAccountName: cloudmonitor-sa # Uses the permissions you just updated
+      serviceAccountName: cloudmonitor-sa
       containers:
-      - name: monitor-app
-        image: cloud-monitor:v1 # Make sure this matches your 'docker build' tag
-        imagePullPolicy: Never # Crucial for Minikube to use your local image
+      - name: cloud-monitor
+        image: cloud-monitor:v1
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 5000
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 20
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 3
         envFrom:
         - secretRef:
-            name: cloud-monitor-secrets # Pulls your Gmail/Slack credentials safely
+            name: cloud-monitor-secrets
+            optional: true
