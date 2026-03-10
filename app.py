@@ -595,5 +595,10 @@ if __name__ == '__main__':
     print("=" * 50)
     
     is_debug = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
-    app.run(host='0.0.0.0', port=5000, debug=is_debug)
+    port = int(os.environ.get('PORT', 5000))
+    if is_debug:
+        app.run(host='0.0.0.0', port=port, debug=True)
+    else:
+        # Production: Gunicorn handles WSGI server
+        app.run(host='0.0.0.0', port=port, debug=False)
     

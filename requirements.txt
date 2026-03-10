@@ -9,3 +9,4 @@ setuptools>=70.0.0
 wheel>=0.43.0
 pandas==2.2.3
 scikit-learn==1.5.2
+gunicorn==21.2.0
