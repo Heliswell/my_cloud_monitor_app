@@ -4,6 +4,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
 import sqlite3
 import time 
+import hmac
 last_alert_time = 0 
 last_email_alert_time = 0
 # Cooldown period in seconds (e.g., 300 seconds = 5 minutes)
@@ -27,9 +28,55 @@ import json
 import os  
 import requests
 from dotenv import load_dotenv 
+try:
+    from flask_httpauth import HTTPBasicAuth
+except ImportError:
+    HTTPBasicAuth = None
 
 load_dotenv()
 webhook_url = os.getenv('SLACK_WEBHOOK_URL')
+DASHBOARD_USERNAME = os.getenv("DASHBOARD_USERNAME")
+DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD")
+AUTH_ENABLED = (
+    os.getenv("AUTH_ENABLED", "true").lower() in ("1", "true", "yes")
+    and HTTPBasicAuth is not None
+    and bool(DASHBOARD_USERNAME)
+    and bool(DASHBOARD_PASSWORD)
+)
+
+if HTTPBasicAuth is None:
+    print("⚠️ flask-httpauth is not installed. Dashboard auth is disabled.")
+elif os.getenv("AUTH_ENABLED", "true").lower() in ("1", "true", "yes") and not AUTH_ENABLED:
+    print("⚠️ AUTH_ENABLED is true but DASHBOARD_USERNAME/PASSWORD not set. Auth is disabled.")
+
+if HTTPBasicAuth is not None:
+    auth = HTTPBasicAuth()
+else:
+    class NoAuth:
+        def verify_password(self, func):
+            return func
+
+        def login_required(self, func):
+            return func
+
+    auth = NoAuth()
+
+
+@auth.verify_password
+def verify_password(username, password):
+    if not AUTH_ENABLED:
+        return True
+
+    return (
+        hmac.compare_digest(username or "", DASHBOARD_USERNAME)
+        and hmac.compare_digest(password or "", DASHBOARD_PASSWORD)
+    )
+
+
+def require_auth(func):
+    if not AUTH_ENABLED:
+        return func
+    return auth.login_required(func)
 
 def send_email_alert(subject, body):
     # Pull from .env for security
@@ -270,11 +317,13 @@ def get_pod_health():
 
 
 @app.route('/')
+@require_auth
 def index():
     return render_template('index.html')
 
 
 @app.route('/api/metrics')
+@require_auth
 def get_metrics():
     """API endpoint to get current system metrics with Alert Cooldown"""
     global last_alert_time
@@ -337,12 +386,14 @@ def get_metrics():
 
 
 @app.route('/api/history')
+@require_auth
 def get_history():
     """API endpoint to get historical data"""
     return jsonify(history[-50:])  # Return last 50 data points
 
 
 @app.route('/api/demo/send-summary-email', methods=['GET', 'POST'])
+@require_auth
 def demo_send_summary_email():
     """Manually trigger summary email for demos."""
     days = request.args.get('days', default=1, type=int)
@@ -358,6 +409,7 @@ def demo_send_summary_email():
 
 
 @app.route('/api/demo/send-alert-email', methods=['GET', 'POST'])
+@require_auth
 def demo_send_alert_email():
     """Manually trigger anomaly email report for demos."""
     payload = request.get_json(silent=True) or {}
@@ -405,7 +457,56 @@ def demo_send_alert_email():
         "metrics": {"cpu": cpu, "memory": memory, "disk": disk}
     })
 
+
+@app.route('/api/demo/send-slack-alert', methods=['GET', 'POST'])
+@require_auth
+def demo_send_slack_alert():
+    """Manually trigger a Slack alert for demos."""
+    global last_alert_time
+
+    payload = request.get_json(silent=True) or {}
+
+    message = request.args.get("message", default=None, type=str)
+    if not message:
+        message = payload.get("message")
+    if not message:
+        message = "🚨 *CloudMonitor Demo Alert:* Manual Slack alert test."
+
+    force_flag = request.args.get("force", str(payload.get("force", "false"))).lower()
+    force_send = force_flag in ("1", "true", "yes")
+
+    if not webhook_url:
+        return jsonify({
+            "status": "not_sent",
+            "reason": "SLACK_WEBHOOK_URL is not configured."
+        }), 400
+
+    current_time = time.time()
+    if not force_send and (current_time - last_alert_time) <= ALERT_COOLDOWN:
+        remaining = int(ALERT_COOLDOWN - (current_time - last_alert_time))
+        return jsonify({
+            "status": "suppressed",
+            "reason": f"Slack cooldown active. Try again in {remaining}s.",
+            "remaining_seconds": remaining
+        })
+
+    if not send_slack_message(message):
+        return jsonify({
+            "status": "not_sent",
+            "reason": "Slack request failed. Check webhook URL and network."
+        }), 502
+
+    last_alert_time = current_time
+    return jsonify({
+        "status": "sent",
+        "type": "slack",
+        "message": message,
+        "forced": force_send
+    })
+
+
 @app.route('/api/export-csv')
+@require_auth
 def export_csv():
     """Generates a CSV file from the metrics.db data"""
     try:
@@ -432,6 +533,7 @@ def export_csv():
     
 
 @app.route('/api/pods')
+@require_auth
 def get_pods():
     pods, error = get_pod_health()
     return jsonify({

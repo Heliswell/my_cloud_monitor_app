@@ -21,6 +21,10 @@ A robust Python-based monitoring dashboard designed for local and Kubernetes env
 2. Create venv: `python3 -m venv venv`
 3. Install dependencies: `pip install -r requirements.txt`
 4. Setup `.env` using `.env.example`
+   - Add dashboard auth credentials to enable Basic Auth:
+   - `AUTH_ENABLED=true`
+   - `DASHBOARD_USERNAME=admin`
+   - `DASHBOARD_PASSWORD=change-me`
 5. Run: `python app.py`
 
 ## ☸️ Local Kubernetes (Minikube)
